@@ -12,6 +12,7 @@ from helpers.constants import (
     TITLE_NO_FILE_SELECTED,
     TITLE_PROCESSING_ERROR,
     TITLE_FIELD_REPORT,
+    FIELD_COL_FLAG
 )
 
 from PySide6.QtWidgets import QWidget, QMessageBox
@@ -134,7 +135,6 @@ def field_report_generator(parent: QWidget, input_paths : list[str]):
                 continue
         except Exception as e:
             print(f"Error reading {path}: {e}")
-            continue
 
         for col in df.columns:
             metrics = profile_column(df[col])
@@ -143,8 +143,6 @@ def field_report_generator(parent: QWidget, input_paths : list[str]):
                 FIELD_COL_COLUMN: col
             })
             results.append(metrics)
-
-        del df  # frees memory
 
     report_df = pd.DataFrame(results)[[
         FIELD_COL_FILE,
@@ -158,35 +156,89 @@ def field_report_generator(parent: QWidget, input_paths : list[str]):
     ]]
     
     report_df.insert(2, FIELD_COL_IMPORT, None)
+    # Add FLAG column that toggles per-file groups; guard against empty dataframes
+    if not report_df.empty and FIELD_COL_FILE in report_df.columns:
+        try:
+            first_fill = report_df[FIELD_COL_FILE].iloc[0]
+        except Exception:
+            first_fill = None
+        report_df[FIELD_COL_FLAG] = (report_df[FIELD_COL_FILE] != report_df[FIELD_COL_FILE].shift(fill_value=first_fill)).cumsum() % 2
+    else:
+        # Create an integer column with default 0 when missing data
+        report_df[FIELD_COL_FLAG] = 0
 
     column_widths = {
         FIELD_COL_FILE: 30,
         FIELD_COL_TOP5_DISTINCT: 50
     }
 
-    # Build conditional formatting for Import column
+    # helper: convert zero-based column index to Excel letter
+    def colnum_to_letter(n):
+        result = ""
+        while n >= 0:
+            result = chr(n % 26 + ord("A")) + result
+            n = n // 26 - 1
+        return result
+    
+    row_count = len(report_df)
+    col_count = len(report_df.columns)
+    last_col_letter = colnum_to_letter(col_count - 1)
+    first_col_letter = colnum_to_letter(0)
+
+    # Column containing the flag
+    # Use report_df's columns and constant for Flag
+    try:
+        flag_column_letter = colnum_to_letter(report_df.columns.get_loc(FIELD_COL_FLAG))
+    except Exception:
+        flag_column_letter = None
+
+    # Build conditional formatting for Import column and Flag-based row coloring
     conditional_formats = [
         {
             'columns': FIELD_COL_IMPORT,
             'type': 'cell',
             'criteria': '==',
             'value': 'Yes',
-            'format': {'bg_color': '#C6EFCE', 'font_color': '#006100'},
+            'format': {'bg_color': "#7CDA8E", 'font_color': '#006100'},
             'first_row': 1,
             'last_row': max(1, report_df.shape[0]),
         },
+        # placeholder for flag-based full-row rule; the formula will be derived below when the Flag column is present
         {
             'columns': FIELD_COL_IMPORT,
             'type': 'cell',
             'criteria': '==',
             'value': 'No',
-            'format': {'bg_color': '#FFC7CE', 'font_color': '#9C0006'},
+            'format': {'bg_color': "#DD8989", 'font_color': '#9C0006'},
+            'first_row': 1,
+            'last_row': max(1, report_df.shape[0]),
+        },
+        {
+            'columns': ['*'],
+            'type': 'formula',
+            'criteria': '',  # populated below once we have the Flag column index
+            'format': {'bg_color': "#C8E3EC"},
             'first_row': 1,
             'last_row': max(1, report_df.shape[0]),
         }
     ]
 
     # Use formatted Excel writer to create a more readable file
+    # Example: hide Import column in the final workbook
+    hide_cols = [FIELD_COL_FLAG]
+
+    # Populate the formula for the Flag-based full-row rule (apply across all columns)
+    try:
+        if flag_column_letter:
+            first_data_row = 2  # Excel row index (1-based) for first data row, since header is row 1
+            conditional_formats[-1]['criteria'] = f'=${flag_column_letter}{first_data_row}=1'
+        else:
+            # remove wildcard rule if flag column absent
+            conditional_formats = [r for r in conditional_formats if not (r.get('type') == 'formula' and r.get('columns') == ['*'])]
+    except Exception:
+        # remove wildcard rule if flag column absent
+        conditional_formats = [r for r in conditional_formats if not (r.get('type') == 'formula' and r.get('columns') == ['*'])]
+
     save_formatted_excel(
         report_df,
         output_path,
@@ -205,6 +257,7 @@ def field_report_generator(parent: QWidget, input_paths : list[str]):
             all_borders=True,
             header_column_colors={FIELD_COL_IMPORT: {'bg_color': "#524B4B", 'font_color': '#FFFFFF'}},
             validation_columns={FIELD_COL_IMPORT: ['Yes', 'No']},
+            hide_columns=hide_cols,
             conditional_format_rules=conditional_formats,
     )
     return output_path

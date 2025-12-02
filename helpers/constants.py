@@ -8,6 +8,7 @@ FIELD_COL_EMPTY_VALUES = "EmptyValues%"
 FIELD_COL_TOP5_DISTINCT = "Top5UniqueValues"
 FIELD_COL_MAX_CHAR_LENGTH = "MaxCharacterLength"
 FIELD_COL_IMPORT = "Import"
+FIELD_COL_FLAG = "Flag"
 # Field report columns
 
 """

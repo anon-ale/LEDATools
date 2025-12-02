@@ -90,6 +90,7 @@ def save_formatted_excel(
     # Removed validate_import_column & import_validation_options — use `validation_columns` instead
     validation_columns: Optional[Dict[str, Iterable[str]]] = None,
     conditional_format_rules: Optional[List[Dict[str, Any]]] = None,
+    hide_columns: Optional[List[str]] = None,
 ) -> Path:
     """Save a DataFrame as an Excel file with basic header formatting and autosized columns.
 
@@ -114,6 +115,7 @@ def save_formatted_excel(
             - 'value': value for the criteria (string or number)
             - 'format': a dict with format keys (bg_color, font_color, bold, border) to be passed to XlsxWriter.add_format
             - Optional 'first_row' and 'last_row' integers (0-based); default applies to data rows only (first row = 1)
+        - hide_columns: Optional list of column names to hide in the saved Excel workbook. Case-insensitive matching is used; missing columns are ignored.
         - validation_columns: Optional mapping of column name -> iterable of allowed values (e.g., {'Import': ['yes', 'no'], 'ColumnB': ['A', 'B']}). These take precedence over validate_import_column.
 
     Returns the path that was written.
@@ -247,6 +249,27 @@ def save_formatted_excel(
                     # ignore errors and continue
                     continue
 
+        # Optional: hide columns if requested
+        if hide_columns:
+            try:
+                # case-insensitive lookup map
+                col_lookup = {str(c).lower(): i for i, c in enumerate(df.columns)}
+                for col_name in hide_columns:
+                    if not col_name:
+                        continue
+                    ci = str(col_name).lower()
+                    idx = col_lookup.get(ci)
+                    if idx is None:
+                        continue
+                    try:
+                        # set column hidden using XlsxWriter options
+                        worksheet.set_column(idx, idx, None, None, {'hidden': True})
+                    except Exception:
+                        # ignore issues with hiding individual columns
+                        continue
+            except Exception:
+                pass
+
         # Optional: apply conditional formatting rules passed from caller
         if conditional_format_rules:
             for rule in conditional_format_rules:
@@ -264,10 +287,54 @@ def save_formatted_excel(
                     value = rule.get('value')
                     format_spec = rule.get('format', {}) or {}
                     # Build XlsxWriter format
-                    fmt = workbook.add_format({
-                        k: v for k, v in format_spec.items() if v is not None
-                    })
-                    # For every target column, resolve index and apply conditional_format
+                    # Normalize format_spec values and convert hex colors
+                    spec = {}
+                    for k, v in format_spec.items():
+                        if v is None:
+                            continue
+                        if k in ('bg_color', 'fg_color', 'fgcolor', 'font_color', 'fontcolour', 'fontcolour'):
+                            norm = _normalize_hex_color(v)
+                            if norm:
+                                # XlsxWriter expects 'fg_color' or 'font_color'
+                                if k in ('bg_color', 'fg_color'):
+                                    spec['fg_color'] = norm
+                                    spec['bg_color'] = norm
+                                else:
+                                    spec['font_color'] = norm
+                            continue
+                        spec[k] = v
+                    # If a fill color (fg_color / bg_color) is present, set a solid pattern for visibility
+                    if 'fg_color' in spec or 'bg_color' in spec:
+                        spec.setdefault('pattern', 1)
+                    fmt = workbook.add_format(spec)
+                    # Prepare kwargs for conditional_format (works for wildcard and per-column rules)
+                    kwargs = {'type': rule_type, 'format': fmt}
+                    if rule_type == 'cell':
+                        kwargs['criteria'] = criteria
+                        if isinstance(value, str) and not (value.startswith('"') and value.endswith('"')):
+                            kwargs['value'] = f'"{value}"'
+                        else:
+                            kwargs['value'] = value
+                    elif rule_type == 'formula':
+                        # For formula-based conditional formatting, XlsxWriter expects a formula string
+                        # under the 'criteria' key (e.g. '=A2=1'). Accept 'value' or 'criteria' from the rule.
+                        formula = None
+                        if isinstance(criteria, str) and criteria.startswith('='):
+                            formula = criteria
+                        elif isinstance(value, str) and value.startswith('='):
+                            formula = value
+                        elif isinstance(value, str) and not value.startswith('='):
+                            formula = '=' + value
+                        if formula is None:
+                            # nothing we can do
+                            continue
+                        kwargs['criteria'] = formula
+                    # If wildcard '*' or 'ALL' requested, apply to full width of the df
+                    if len(cols) == 1 and (cols[0] == '*' or cols[0] == 'ALL'):
+                        first_col = 0
+                        last_col = max(0, df.shape[1] - 1)
+                        worksheet.conditional_format(first_row, first_col, last_row, last_col, kwargs)
+                        continue
                     for col_name in cols:
                         try:
                             col_idx = df.columns.get_loc(col_name)
@@ -280,17 +347,7 @@ def save_formatted_excel(
                                     continue
                             except Exception:
                                 continue
-                        # Prepare criteria/value for XlsxWriter
-                        kwargs = {'type': rule_type, 'format': fmt}
-                        if rule_type == 'cell':
-                            kwargs['criteria'] = criteria
-                            if isinstance(value, str) and not (value.startswith('"') and value.endswith('"')):
-                                kwargs['value'] = f'"{value}"'
-                            else:
-                                kwargs['value'] = value
-                        elif rule_type == 'formula':
-                            kwargs['criteria'] = 'formula'
-                            kwargs['value'] = value
+                        # kwargs already prepared above
                         # Apply to single column range
                         worksheet.conditional_format(first_row, col_idx, last_row, col_idx, kwargs)
                 except Exception:
