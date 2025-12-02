@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from helpers.constants import FIELD_COL_IMPORT
 from typing import Optional, Dict, Any, Iterable, List
+from decimal import Decimal, InvalidOperation
 
 import pandas as pd
 
@@ -29,6 +30,7 @@ def autosize_columns(
     default_max: Optional[int] = 20,
     add_autofilter_padding: bool = False,
     autofilter_padding: int = 3,
+    column_formats: Optional[dict] = None,
 ) -> None:
     """Set column widths on the given XlsxWriter worksheet based on df contents.
 
@@ -38,6 +40,10 @@ def autosize_columns(
     - autofilter_padding: number of extra characters to add when add_autofilter_padding is True
     """
     column_widths = column_widths or {}
+    # Case-insensitive mapping for widths and formats to make caller-friendly
+    column_widths_ci = {str(k).lower(): v for k, v in column_widths.items()} if column_widths else {}
+    column_formats = column_formats or {}
+    column_formats_ci = {str(k).lower(): v for k, v in column_formats.items()} if column_formats else {}
     for idx, col in enumerate(df.columns):
         # Start with header length
         max_len = len(str(col))
@@ -54,13 +60,15 @@ def autosize_columns(
         # Add padding
         width = max_len + 2
         # If caller passed a specific width for this column name, use it
-        if col in column_widths:
+        if str(col).lower() in column_widths_ci:
             try:
-                custom_width = int(column_widths[col])
+                custom_width = int(column_widths_ci[str(col).lower()])
                 # Apply optional autosize padding for autofilter arrow
                 if add_autofilter_padding:
                     custom_width += int(autofilter_padding)
-                worksheet.set_column(idx, idx, custom_width)
+                # apply format if a format object exists for this column
+                col_fmt = column_formats_ci.get(str(col).lower())
+                worksheet.set_column(idx, idx, custom_width, col_fmt)
                 continue
             except Exception:
                 # ignore invalid width values, continue with autosize
@@ -72,7 +80,8 @@ def autosize_columns(
         if default_max is not None:
             width = min(width, int(default_max))
         # XlsxWriter uses zero-based column indices
-        worksheet.set_column(idx, idx, width)
+        col_fmt = column_formats_ci.get(str(col).lower())
+        worksheet.set_column(idx, idx, width, col_fmt)
 
 
 def save_formatted_excel(
@@ -91,6 +100,7 @@ def save_formatted_excel(
     validation_columns: Optional[Dict[str, Iterable[str]]] = None,
     conditional_format_rules: Optional[List[Dict[str, Any]]] = None,
     hide_columns: Optional[List[str]] = None,
+    value_formats: Optional[Dict[str, str]] = None,
 ) -> Path:
     """Save a DataFrame as an Excel file with basic header formatting and autosized columns.
 
@@ -116,7 +126,16 @@ def save_formatted_excel(
             - 'format': a dict with format keys (bg_color, font_color, bold, border) to be passed to XlsxWriter.add_format
             - Optional 'first_row' and 'last_row' integers (0-based); default applies to data rows only (first row = 1)
         - hide_columns: Optional list of column names to hide in the saved Excel workbook. Case-insensitive matching is used; missing columns are ignored.
-        - validation_columns: Optional mapping of column name -> iterable of allowed values (e.g., {'Import': ['yes', 'no'], 'ColumnB': ['A', 'B']}). These take precedence over validate_import_column.
+                - validation_columns: Optional mapping of column name -> iterable of allowed values (e.g., {'Import': ['yes', 'no'], 'ColumnB': ['A', 'B']}). These take precedence over validate_import_column.
+                - value_formats: Optional mapping of column name -> format name (e.g., {'Pct': 'percent', 'Count': 'int'}). Supported shorthands (case-insensitive):
+                        - 'percent' => dynamic precision-based percent format (preserves source decimal digits, avoids rounding)
+                        - 'percent2' => fixed two-decimal percent '0.00%'
+                        - 'percent0' => zero-decimal percent '0%'
+                        - 'int' or 'integer' => integer format '0'
+                        - 'float2' or 'decimal2' => '0.00'
+                        - 'currency' or 'money' => '$#,##0.00'
+                        - 'date' => 'yyyy-mm-dd'
+                    You can also pass a raw number format string such as '0.000' or '0.00%'.
 
     Returns the path that was written.
     """
@@ -182,7 +201,43 @@ def save_formatted_excel(
                 )
                 worksheet.write(0, c_idx, str(col_name), col_format)
 
-        # Autosize columns using the helper — allows column_widths and default max
+        # Build column formats for value_formats if provided
+        column_format_objects = {}
+        column_num_formats = {}
+        if value_formats:
+            for col_name, fmt_name in value_formats.items():
+                try:
+                    num_fmt = None
+                    if isinstance(fmt_name, str):
+                        fmt_key = fmt_name.lower()
+                        if fmt_key in ('percent',):
+                            num_fmt = '0.###############%'
+                        elif fmt_key in ('percent2', 'percent_2'):
+                            num_fmt = '0.00%'
+                        elif fmt_key in ('percent1', 'percent_1'):
+                            num_fmt = '0.0%'
+                        elif fmt_key in ('percent0', 'percent_0'):
+                            num_fmt = '0%'
+                        elif fmt_key in ('integer', 'int'):
+                            num_fmt = '0'
+                        elif fmt_key in ('float2', 'decimal2'):
+                            num_fmt = '0.00'
+                        elif fmt_key in ('currency', 'money'):
+                            num_fmt = '$#,##0.00'
+                        elif fmt_key in ('date', 'yyyy-mm-dd'):
+                            num_fmt = 'yyyy-mm-dd'
+                        else:
+                            # assume it's a raw format string like '0.00%'
+                            num_fmt = fmt_name
+                    else:
+                        continue
+                    if num_fmt:
+                        column_num_formats[col_name] = num_fmt
+                        column_format_objects[col_name] = workbook.add_format({'num_format': num_fmt})
+                except Exception:
+                    continue
+
+        # Autosize columns using the helper — allows column_widths and default max and column_formats
         autosize_columns(
             worksheet,
             df,
@@ -190,6 +245,7 @@ def save_formatted_excel(
             default_max=default_width_max,
             add_autofilter_padding=bool(autofilter),
             autofilter_padding=int(autofilter_padding),
+            column_formats=column_format_objects,
         )
 
         # Optional: freeze the header row
@@ -210,11 +266,25 @@ def save_formatted_excel(
                     value = df.iat[r, c]
                     excel_r = r + 1  # header is row 0
                     try:
+                        # try to preserve number format for a column if present
+                        col_name = df.columns[c]
+                        num_fmt = None
+                        # If we have a numeric format for this column, create a combined format with border
+                        combined_fmt = None
+                        # column_num_formats may be present and hold raw format strings
+                        num_fmt = column_num_formats.get(col_name)
+                        if num_fmt:
+                            try:
+                                combined_fmt = workbook.add_format({'border': 1, 'num_format': num_fmt})
+                            except Exception:
+                                combined_fmt = cell_border_fmt
+                        else:
+                            combined_fmt = cell_border_fmt
                         if pd.isna(value):
                             # write blank value, preserve type
-                            worksheet.write_blank(excel_r, c, None, cell_border_fmt)
+                            worksheet.write_blank(excel_r, c, None, combined_fmt)
                         else:
-                            worksheet.write(excel_r, c, value, cell_border_fmt)
+                            worksheet.write(excel_r, c, value, combined_fmt)
                     except Exception:
                         # fallback: write empty string with border
                         worksheet.write(excel_r, c, "", cell_border_fmt)

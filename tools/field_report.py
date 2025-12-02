@@ -98,7 +98,7 @@ def profile_column(series: pd.Series) -> dict:
         FIELD_COL_DISTINCT_COUNT: non_null_series.nunique(),
         FIELD_COL_TOP5_DISTINCT: top5,
         FIELD_COL_VALUE_COUNT: len(non_null_series),
-        FIELD_COL_EMPTY_VALUES: round((null_count / total) * 100, 1) if total > 0 else 0,
+        FIELD_COL_EMPTY_VALUES: round((null_count / total), 2) if total > 0 else 0,
         FIELD_COL_INFERRED_TYPE: inferred_type,
         FIELD_COL_MAX_CHAR_LENGTH: max_length,
     }
@@ -259,6 +259,8 @@ def field_report_generator(parent: QWidget, input_paths : list[str]):
             validation_columns={FIELD_COL_IMPORT: ['Yes', 'No']},
             hide_columns=hide_cols,
             conditional_format_rules=conditional_formats,
+            # Format percentage-like columns as percentages for readability
+            value_formats={FIELD_COL_EMPTY_VALUES: 'percent0'},
     )
     return output_path
 
