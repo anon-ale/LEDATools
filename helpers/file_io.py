@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional, List
 import pandas as pd
 from openpyxl import load_workbook
+from helpers.constants import EXCEL_EXTENSIONS
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
@@ -45,26 +46,32 @@ def read_data_file(path, read_all_sheets=False):
                     continue
             return pd.read_csv(p, engine="python", on_bad_lines="skip")
 
-    # Excel handling with fallback
+    # Excel handling using known Excel extensions, with a robust fallback
+    suffix = p.suffix.lower()
     try:
+        # If the suffix explicitly indicates Excel, use pandas.read_excel directly
+        if suffix in EXCEL_EXTENSIONS:
+            if read_all_sheets:
+                return pd.read_excel(p, sheet_name=None)
+            return pd.read_excel(p)
+
+        # Unknown extension: attempt to read as Excel first (pandas supports many formats)
         if read_all_sheets:
-            # Read all sheets as a dict
             return pd.read_excel(p, sheet_name=None)
-        else:
-            return pd.read_excel(p)   # normal read (first sheet only)
+        return pd.read_excel(p)
     except Exception:
-        # Fallback: read values only, ignore broken XML styles
+        # Fallback: read values only, ignore broken XML/styles using openpyxl
         try:
             wb = load_workbook(filename=p, data_only=True)
             if read_all_sheets:
-                # Read all sheets via openpyxl fallback
                 result = {}
                 for sheet_name in wb.sheetnames:
                     sheet = wb[sheet_name]
                     data = list(sheet.values)
-                    if data:
-                        cols = data[0]
-                        result[sheet_name] = pd.DataFrame(data[1:], columns=cols)
+                    if not data:
+                        continue
+                    cols = data[0]
+                    result[sheet_name] = pd.DataFrame(data[1:], columns=cols)
                 return result if result else None
             else:
                 sheet = wb[wb.sheetnames[0]]

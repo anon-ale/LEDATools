@@ -16,7 +16,8 @@ Project-wide constants for LEDATools
 """
 
 # Excel file extensions
-EXCEL_EXTENSIONS = [".xlsx"]
+# Include common Excel extensions so file helpers can recognize them all
+EXCEL_EXTENSIONS = [".xlsx", ".xls", ".xlsm", ".xlsb"]
 
 # Settings keys
 LAST_OPEN_DIR_KEY = "last_open_dir"

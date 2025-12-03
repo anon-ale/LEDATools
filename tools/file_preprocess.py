@@ -1,5 +1,6 @@
 
 from typing import Any, Dict
+from pathlib import Path
 
 import pandas as pd
 from PySide6.QtWidgets import QWidget
@@ -14,10 +15,32 @@ from helpers.file_io import (
 )
 from helpers.config import load_settings, save_settings
 
+def process_df():
+    return None
 
 def file_preprocessing(input_paths: list[str], output_path: str) -> None:
+
+
+    file_name_to_df: Dict[str, pd.DataFrame] = {}
+
     for file_path in input_paths:
-        df = read_data_file(file_path,read_all_sheets=True)
+        result = read_data_file(file_path, read_all_sheets=True)
+        if result is None:
+            continue
+        # Get filename (stem) from the path for friendly keys and logging
+        file_name = Path(file_path).stem
+        if isinstance(result, dict):
+            # Multiple sheets: store each sheet keyed by "filename::sheetname"
+            for sheet_name, df in result.items():
+                if len(df) == 0:
+                    continue
+                key = f"{file_name.replace(".xlsx","").replace()}__{sheet_name}"
+                file_name_to_df[key] = df
+            continue
+        else:
+            df = result
+            # single-sheet file: store by filename
+            file_name_to_df[file_name] = df
 
 
 
