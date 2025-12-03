@@ -6,29 +6,71 @@ from openpyxl import load_workbook
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
-def read_data_file(path):
+def read_data_file(path, read_all_sheets=False):
+    """Read data from a file (CSV or Excel).
+    
+    Parameters:
+    - path: file path (str or Path)
+    - read_all_sheets: if True and the file is Excel, return a dict of {sheet_name: DataFrame}.
+                       if False (default), return a single DataFrame from the first sheet (CSV or Excel).
+    
+    Returns:
+    - Single DataFrame (if read_all_sheets=False)
+    - Dict[str, DataFrame] (if read_all_sheets=True and file is Excel)
+    - None (if file cannot be read)
+    """
     p = Path(path)
 
     # CSV handling goes here...
     if p.suffix.lower() == ".csv":
-        for enc in ["utf-8", "latin1", "windows-1252"]:
+        if read_all_sheets:
+            # CSV doesn't have multiple sheets; return a dict with one entry
             try:
-                return pd.read_csv(p, encoding=enc)
-            except Exception:
-                continue
-        return pd.read_csv(p, engine="python", on_bad_lines="skip")
+                for enc in ["utf-8", "latin1", "windows-1252"]:
+                    try:
+                        df = pd.read_csv(p, encoding=enc)
+                        return {p.stem: df}
+                    except Exception:
+                        continue
+                df = pd.read_csv(p, engine="python", on_bad_lines="skip")
+                return {p.stem: df}
+            except Exception as e:
+                print(f"Skipped unreadable CSV file: {p.name} ({e})")
+                return None
+        else:
+            for enc in ["utf-8", "latin1", "windows-1252"]:
+                try:
+                    return pd.read_csv(p, encoding=enc)
+                except Exception:
+                    continue
+            return pd.read_csv(p, engine="python", on_bad_lines="skip")
 
     # Excel handling with fallback
     try:
-        return pd.read_excel(p)   # normal read
+        if read_all_sheets:
+            # Read all sheets as a dict
+            return pd.read_excel(p, sheet_name=None)
+        else:
+            return pd.read_excel(p)   # normal read (first sheet only)
     except Exception:
         # Fallback: read values only, ignore broken XML styles
         try:
             wb = load_workbook(filename=p, data_only=True)
-            sheet = wb[wb.sheetnames[0]]
-            data = sheet.values
-            cols = next(data)  # first row as header
-            return pd.DataFrame(data, columns=cols)
+            if read_all_sheets:
+                # Read all sheets via openpyxl fallback
+                result = {}
+                for sheet_name in wb.sheetnames:
+                    sheet = wb[sheet_name]
+                    data = list(sheet.values)
+                    if data:
+                        cols = data[0]
+                        result[sheet_name] = pd.DataFrame(data[1:], columns=cols)
+                return result if result else None
+            else:
+                sheet = wb[wb.sheetnames[0]]
+                data = sheet.values
+                cols = next(data)  # first row as header
+                return pd.DataFrame(data, columns=cols)
         except Exception as e:
             print(f"Skipped unreadable Excel file: {p.name} ({e})")
             return None

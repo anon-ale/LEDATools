@@ -10,12 +10,16 @@ from helpers.file_io import (
     show_info,
     show_error,
     show_warning,
+    read_data_file
 )
 from helpers.config import load_settings, save_settings
 
 
-def clean_crm_excel(input_path: str, output_path: str) -> None:
-    df = pd.read_excel(input_path)
+def file_preprocessing(input_paths: list[str], output_path: str) -> None:
+    for file_path in input_paths:
+        df = read_data_file(file_path,read_all_sheets=True)
+
+
 
     df = df.dropna(axis=1, how="all")
 
@@ -29,8 +33,8 @@ def clean_crm_excel(input_path: str, output_path: str) -> None:
 def run_file_preprocessing_workflow(parent: QWidget) -> None:
     settings: Dict[str, Any] = load_settings()
 
-    input_path = ask_for_multiple_files(parent, "Select Files to Process")
-    if not input_path:
+    input_paths = ask_for_multiple_files(parent, "Select Files to Process")
+    if len(input_paths) == 0:
         show_warning(parent, "No File Selected", "Please choose an input file.")
         return
 
@@ -40,7 +44,7 @@ def run_file_preprocessing_workflow(parent: QWidget) -> None:
         return
 
     try:
-        clean_crm_excel(input_path, output_path)
+        file_preprocessing(input_paths, output_path)
     except Exception as e:
         show_error(parent, "Processing Error", f"An error occurred:\n{e}")
         return
